@@ -14,6 +14,17 @@ struct StreamKitGroup {
     int pollIntervalMs = 250;
 };
 
+struct PngTuberConfig {
+    int id = 0;
+    int groupId = 0;
+    std::string name;
+    std::string closedMouthOpenEyesPath;
+    std::string closedMouthClosedEyesPath;
+    std::string openMouthOpenEyesPath;
+    std::string openMouthClosedEyesPath;
+    std::string mutePath;
+};
+
 class GroupStore final {
 public:
     GroupStore();
@@ -32,6 +43,10 @@ public:
     bool RenameGroup(int groupId, const std::string& name);
     bool UpdateGroup(const StreamKitGroup& group);
     bool DeleteGroup(int groupId);
+    std::vector<PngTuberConfig> ListPngTubersForGroup(int groupId) const;
+    std::optional<PngTuberConfig> CreatePngTuber(int groupId, const std::string& name);
+    bool UpdatePngTuber(const PngTuberConfig& pngTuber);
+    bool DeletePngTuber(int pngTuberId);
 
 private:
     bool Open();

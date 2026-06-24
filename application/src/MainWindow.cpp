@@ -7,6 +7,8 @@
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
+#include <wx/filedlg.h>
+#include <wx/listbox.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/notebook.h>
@@ -29,7 +31,11 @@ enum MenuIds {
     IdCreateGroup,
     IdRenameGroup,
     IdDeleteGroup,
-    IdSaveGroup
+    IdSaveGroup,
+    IdPngTuberList,
+    IdCreatePngTuber,
+    IdDeletePngTuber,
+    IdSavePngTuber
 };
 
 wxString BoolText(bool value)
@@ -48,6 +54,7 @@ MainWindow::MainWindow()
       groupStore_(std::make_unique<GroupStore>()),
       streamKit_(std::make_unique<StreamKitMonitor>())
 {
+    Bind(wxEVT_CLOSE_WINDOW, &MainWindow::OnMainWindowClose, this);
     BuildMenu();
     BuildMainPanel();
     WireStreamKitCallbacks();
@@ -89,6 +96,8 @@ void MainWindow::BuildMainPanel()
 
     auto* notebook = new wxNotebook(panel, wxID_ANY);
     BuildStreamKitPanel(notebook);
+    BuildPngTuberPanel(notebook);
+    LoadGroups();
 
     outer->Add(notebook, 1, wxEXPAND | wxALL, 8);
     panel->SetSizer(outer);
@@ -195,13 +204,92 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
     usersBox->Add(voiceUsersSummaryLabel_, 0, wxEXPAND | wxALL, 8);
     usersBox->Add(voiceUsersList_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-    LoadGroups();
-
     outer->Add(groupsBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
     outer->Add(settingsBox, 0, wxEXPAND | wxALL, 8);
     outer->Add(usersBox, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
     panel->SetSizer(outer);
     notebook->AddPage(panel, "StreamKit Overlay");
+}
+
+void MainWindow::BuildPngTuberPanel(wxNotebook* notebook)
+{
+    auto* panel = new wxPanel(notebook);
+    auto* outer = new wxBoxSizer(wxVERTICAL);
+
+    auto* headerBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Group Scope");
+    pngTuberGroupLabel_ = new wxStaticText(panel, wxID_ANY, "Active group: none");
+    headerBox->Add(
+        pngTuberGroupLabel_,
+        0,
+        wxEXPAND | wxALL,
+        8
+    );
+
+    auto* content = new wxBoxSizer(wxHORIZONTAL);
+
+    auto* listBox = new wxStaticBoxSizer(wxVERTICAL, panel, "PNGTubers");
+    pngTuberList_ = new wxListBox(panel, IdPngTuberList);
+    auto* pngTuberButtons = new wxBoxSizer(wxHORIZONTAL);
+    auto* newPngTuberButton = new wxButton(panel, IdCreatePngTuber, "New PNGTuber");
+    auto* deletePngTuberButton = new wxButton(panel, IdDeletePngTuber, "Delete");
+    newPngTuberButton->Bind(wxEVT_BUTTON, &MainWindow::OnCreatePngTuber, this);
+    deletePngTuberButton->Bind(wxEVT_BUTTON, &MainWindow::OnDeletePngTuber, this);
+    pngTuberList_->Bind(wxEVT_LISTBOX, &MainWindow::OnPngTuberSelected, this);
+    pngTuberButtons->Add(newPngTuberButton, 0, wxRIGHT, 8);
+    pngTuberButtons->Add(deletePngTuberButton, 0);
+    listBox->Add(pngTuberList_, 1, wxEXPAND | wxALL, 8);
+    listBox->Add(pngTuberButtons, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+    auto* editorBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Configurator");
+    auto* grid = new wxFlexGridSizer(6, 3, 6, 8);
+    grid->AddGrowableCol(1, 1);
+
+    pngTuberNameText_ = new wxTextCtrl(panel, wxID_ANY);
+    closedMouthOpenEyesPathText_ = new wxTextCtrl(panel, wxID_ANY);
+    closedMouthClosedEyesPathText_ = new wxTextCtrl(panel, wxID_ANY);
+    openMouthOpenEyesPathText_ = new wxTextCtrl(panel, wxID_ANY);
+    openMouthClosedEyesPathText_ = new wxTextCtrl(panel, wxID_ANY);
+    mutePathText_ = new wxTextCtrl(panel, wxID_ANY);
+
+    auto addPathRow = [&](const wxString& label, wxTextCtrl*& textCtrl) {
+        grid->Add(new wxStaticText(panel, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
+        grid->Add(textCtrl, 1, wxEXPAND);
+        auto* browseButton = new wxButton(panel, wxID_ANY, "Browse...");
+        browseButton->Bind(wxEVT_BUTTON, [this, textCtrl](wxCommandEvent&) {
+            BrowseForImage(textCtrl);
+        });
+        grid->Add(browseButton, 0);
+    };
+
+    grid->Add(new wxStaticText(panel, wxID_ANY, "Name"), 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(pngTuberNameText_, 1, wxEXPAND);
+    grid->AddSpacer(0);
+    addPathRow("Closed Mouth / Open Eyes", closedMouthOpenEyesPathText_);
+    addPathRow("Closed Mouth / Closed Eyes", closedMouthClosedEyesPathText_);
+    addPathRow("Open Mouth / Open Eyes", openMouthOpenEyesPathText_);
+    addPathRow("Open Mouth / Closed Eyes", openMouthClosedEyesPathText_);
+    addPathRow("Mute Image (optional)", mutePathText_);
+
+    auto* savePngTuberButton = new wxButton(panel, IdSavePngTuber, "Save PNGTuber");
+    savePngTuberButton->Bind(wxEVT_BUTTON, &MainWindow::OnSavePngTuber, this);
+
+    auto* helperText = new wxStaticText(
+        panel,
+        wxID_ANY,
+        "Each PNGTuber stores 4 required state images plus an optional mute image."
+    );
+
+    editorBox->Add(helperText, 0, wxEXPAND | wxALL, 8);
+    editorBox->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+    editorBox->Add(savePngTuberButton, 0, wxALIGN_LEFT | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+
+    content->Add(listBox, 0, wxEXPAND | wxALL, 8);
+    content->Add(editorBox, 1, wxEXPAND | wxTOP | wxRIGHT | wxBOTTOM, 8);
+
+    outer->Add(headerBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+    outer->Add(content, 1, wxEXPAND);
+    panel->SetSizer(outer);
+    notebook->AddPage(panel, "PNGTubers");
 }
 
 void MainWindow::LoadGroups()
@@ -228,6 +316,40 @@ void MainWindow::LoadGroups()
     SelectGroupById(activeGroupId.value_or(groups_.front().id));
 }
 
+void MainWindow::LoadPngTubersForSelectedGroup()
+{
+    pngTubers_.clear();
+    if (pngTuberList_) {
+        pngTuberList_->Clear();
+    }
+
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId || !groupStore_ || !groupStore_->IsReady()) {
+        if (pngTuberGroupLabel_) {
+            pngTuberGroupLabel_->SetLabel("Active group: none");
+        }
+        ClearPngTuberControls();
+        return;
+    }
+
+    const int selection = groupChoice_ ? groupChoice_->GetSelection() : wxNOT_FOUND;
+    if (pngTuberGroupLabel_ && selection != wxNOT_FOUND && static_cast<size_t>(selection) < groups_.size()) {
+        pngTuberGroupLabel_->SetLabel("Active group: " + groups_[selection].name);
+    }
+
+    pngTubers_ = groupStore_->ListPngTubersForGroup(*selectedGroupId);
+    for (const auto& pngTuber : pngTubers_) {
+        pngTuberList_->Append(pngTuber.name);
+    }
+
+    if (pngTubers_.empty()) {
+        ClearPngTuberControls();
+        return;
+    }
+
+    SelectPngTuberById(pngTubers_.front().id);
+}
+
 void MainWindow::SelectGroupById(int groupId)
 {
     for (size_t index = 0; index < groups_.size(); ++index) {
@@ -235,6 +357,7 @@ void MainWindow::SelectGroupById(int groupId)
             groupChoice_->SetSelection(static_cast<int>(index));
             ApplyGroupToControls(groups_[index]);
             groupStore_->SetActiveGroup(groupId);
+            LoadPngTubersForSelectedGroup();
             return;
         }
     }
@@ -243,6 +366,7 @@ void MainWindow::SelectGroupById(int groupId)
         groupChoice_->SetSelection(0);
         ApplyGroupToControls(groups_.front());
         groupStore_->SetActiveGroup(groups_.front().id);
+        LoadPngTubersForSelectedGroup();
     }
 }
 
@@ -271,6 +395,16 @@ void MainWindow::ApplyGroupToControls(const StreamKitGroup& group)
     browserChoice_->SetSelection(matchedBrowserIndex);
 }
 
+void MainWindow::ApplyPngTuberToControls(const PngTuberConfig& pngTuber)
+{
+    pngTuberNameText_->SetValue(pngTuber.name);
+    closedMouthOpenEyesPathText_->SetValue(pngTuber.closedMouthOpenEyesPath);
+    closedMouthClosedEyesPathText_->SetValue(pngTuber.closedMouthClosedEyesPath);
+    openMouthOpenEyesPathText_->SetValue(pngTuber.openMouthOpenEyesPath);
+    openMouthClosedEyesPathText_->SetValue(pngTuber.openMouthClosedEyesPath);
+    mutePathText_->SetValue(pngTuber.mutePath);
+}
+
 StreamKitGroup MainWindow::CollectGroupFromControls() const
 {
     StreamKitGroup group;
@@ -289,6 +423,25 @@ StreamKitGroup MainWindow::CollectGroupFromControls() const
     group.bypassLocalNetworkPrompt = bypassLocalNetworkPromptCheck_->GetValue();
     group.pollIntervalMs = pollIntervalSpin_->GetValue();
     return group;
+}
+
+PngTuberConfig MainWindow::CollectPngTuberFromControls() const
+{
+    PngTuberConfig pngTuber;
+    if (const auto selectedPngTuberId = GetSelectedPngTuberId()) {
+        pngTuber.id = *selectedPngTuberId;
+    }
+    if (const auto selectedGroupId = GetSelectedGroupId()) {
+        pngTuber.groupId = *selectedGroupId;
+    }
+
+    pngTuber.name = pngTuberNameText_ ? pngTuberNameText_->GetValue().ToStdString() : std::string{};
+    pngTuber.closedMouthOpenEyesPath = closedMouthOpenEyesPathText_->GetValue().ToStdString();
+    pngTuber.closedMouthClosedEyesPath = closedMouthClosedEyesPathText_->GetValue().ToStdString();
+    pngTuber.openMouthOpenEyesPath = openMouthOpenEyesPathText_->GetValue().ToStdString();
+    pngTuber.openMouthClosedEyesPath = openMouthClosedEyesPathText_->GetValue().ToStdString();
+    pngTuber.mutePath = mutePathText_->GetValue().ToStdString();
+    return pngTuber;
 }
 
 bool MainWindow::SaveSelectedGroupSettings(bool announceSuccess)
@@ -319,6 +472,51 @@ bool MainWindow::SaveSelectedGroupSettings(bool announceSuccess)
     return true;
 }
 
+bool MainWindow::SaveSelectedPngTuber(bool announceSuccess)
+{
+    const auto selectedPngTuberId = GetSelectedPngTuberId();
+    if (!selectedPngTuberId) {
+        SetStatus("Select a PNGTuber first.");
+        return false;
+    }
+
+    auto pngTuber = CollectPngTuberFromControls();
+    pngTuber.id = *selectedPngTuberId;
+    pngTuber.name = wxString(pngTuber.name).Trim(true).Trim(false).ToStdString();
+    if (pngTuber.name.empty()) {
+        SetStatus("PNGTuber name cannot be empty.");
+        return false;
+    }
+
+    if (pngTuber.closedMouthOpenEyesPath.empty() || pngTuber.closedMouthClosedEyesPath.empty() ||
+        pngTuber.openMouthOpenEyesPath.empty() || pngTuber.openMouthClosedEyesPath.empty()) {
+        SetStatus("All 4 mouth/eye image paths are required.");
+        return false;
+    }
+
+    if (!groupStore_->UpdatePngTuber(pngTuber)) {
+        SetStatus(groupStore_->GetLastError());
+        return false;
+    }
+
+    for (auto& existingPngTuber : pngTubers_) {
+        if (existingPngTuber.id == pngTuber.id) {
+            existingPngTuber = pngTuber;
+            break;
+        }
+    }
+
+    const int selection = pngTuberList_ ? pngTuberList_->GetSelection() : wxNOT_FOUND;
+    if (selection != wxNOT_FOUND && static_cast<size_t>(selection) < pngTubers_.size()) {
+        pngTuberList_->SetString(selection, pngTuber.name);
+    }
+
+    if (announceSuccess) {
+        SetStatus("Saved PNGTuber " + pngTuber.name + ".");
+    }
+    return true;
+}
+
 std::optional<int> MainWindow::GetSelectedGroupId() const
 {
     if (!groupChoice_) {
@@ -331,6 +529,78 @@ std::optional<int> MainWindow::GetSelectedGroupId() const
     }
 
     return groups_[selection].id;
+}
+
+std::optional<int> MainWindow::GetSelectedPngTuberId() const
+{
+    if (!pngTuberList_) {
+        return std::nullopt;
+    }
+
+    const int selection = pngTuberList_->GetSelection();
+    if (selection == wxNOT_FOUND || static_cast<size_t>(selection) >= pngTubers_.size()) {
+        return std::nullopt;
+    }
+
+    return pngTubers_[selection].id;
+}
+
+void MainWindow::SelectPngTuberById(int pngTuberId)
+{
+    for (size_t index = 0; index < pngTubers_.size(); ++index) {
+        if (pngTubers_[index].id == pngTuberId) {
+            pngTuberList_->SetSelection(static_cast<int>(index));
+            ApplyPngTuberToControls(pngTubers_[index]);
+            return;
+        }
+    }
+
+    if (!pngTubers_.empty()) {
+        pngTuberList_->SetSelection(0);
+        ApplyPngTuberToControls(pngTubers_.front());
+    } else {
+        ClearPngTuberControls();
+    }
+}
+
+void MainWindow::ClearPngTuberControls()
+{
+    if (pngTuberList_) {
+        pngTuberList_->SetSelection(wxNOT_FOUND);
+    }
+    if (pngTuberNameText_) {
+        pngTuberNameText_->Clear();
+    }
+    if (closedMouthOpenEyesPathText_) {
+        closedMouthOpenEyesPathText_->Clear();
+    }
+    if (closedMouthClosedEyesPathText_) {
+        closedMouthClosedEyesPathText_->Clear();
+    }
+    if (openMouthOpenEyesPathText_) {
+        openMouthOpenEyesPathText_->Clear();
+    }
+    if (openMouthClosedEyesPathText_) {
+        openMouthClosedEyesPathText_->Clear();
+    }
+    if (mutePathText_) {
+        mutePathText_->Clear();
+    }
+}
+
+void MainWindow::BrowseForImage(wxTextCtrl* target)
+{
+    wxFileDialog dialog(
+        this,
+        "Choose a PNGTuber image",
+        "",
+        "",
+        "Image files (*.png;*.jpg;*.jpeg;*.webp;*.bmp)|*.png;*.jpg;*.jpeg;*.webp;*.bmp|All files (*.*)|*.*",
+        wxFD_OPEN | wxFD_FILE_MUST_EXIST
+    );
+    if (dialog.ShowModal() == wxID_OK && target) {
+        target->SetValue(dialog.GetPath());
+    }
 }
 
 void MainWindow::WireStreamKitCallbacks()
@@ -360,6 +630,7 @@ void MainWindow::OnGroupSelected(wxCommandEvent&)
     for (const auto& group : groups_) {
         if (group.id == *selectedGroupId) {
             ApplyGroupToControls(group);
+            LoadPngTubersForSelectedGroup();
             SetStatus("Loaded group " + group.name + ".");
             break;
         }
@@ -465,6 +736,100 @@ void MainWindow::OnDeleteGroup(wxCommandEvent&)
 void MainWindow::OnSaveGroup(wxCommandEvent&)
 {
     SaveSelectedGroupSettings(true);
+}
+
+void MainWindow::OnPngTuberSelected(wxCommandEvent&)
+{
+    const auto selectedPngTuberId = GetSelectedPngTuberId();
+    if (!selectedPngTuberId) {
+        ClearPngTuberControls();
+        return;
+    }
+
+    for (const auto& pngTuber : pngTubers_) {
+        if (pngTuber.id == *selectedPngTuberId) {
+            ApplyPngTuberToControls(pngTuber);
+            SetStatus("Loaded PNGTuber " + pngTuber.name + ".");
+            break;
+        }
+    }
+}
+
+void MainWindow::OnCreatePngTuber(wxCommandEvent&)
+{
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId) {
+        SetStatus("Select a group first.");
+        return;
+    }
+
+    wxTextEntryDialog dialog(this, "Enter a name for the new PNGTuber.", "New PNGTuber");
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const wxString pngTuberName = dialog.GetValue().Trim(true).Trim(false);
+    if (pngTuberName.empty()) {
+        SetStatus("PNGTuber name cannot be empty.");
+        return;
+    }
+
+    auto pngTuber = groupStore_->CreatePngTuber(*selectedGroupId, pngTuberName.ToStdString());
+    if (!pngTuber) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    LoadPngTubersForSelectedGroup();
+    SelectPngTuberById(pngTuber->id);
+    SetStatus("Created PNGTuber " + pngTuber->name + ".");
+}
+
+void MainWindow::OnDeletePngTuber(wxCommandEvent&)
+{
+    const auto selectedPngTuberId = GetSelectedPngTuberId();
+    if (!selectedPngTuberId) {
+        SetStatus("Select a PNGTuber first.");
+        return;
+    }
+
+    const int selection = pngTuberList_->GetSelection();
+    wxString pngTuberName = "this PNGTuber";
+    if (selection != wxNOT_FOUND && static_cast<size_t>(selection) < pngTubers_.size()) {
+        pngTuberName = pngTubers_[selection].name;
+    }
+
+    if (wxMessageBox(
+            "Delete PNGTuber \"" + pngTuberName + "\"?",
+            "Delete PNGTuber",
+            wxYES_NO | wxICON_WARNING,
+            this) != wxYES) {
+        return;
+    }
+
+    if (!groupStore_->DeletePngTuber(*selectedPngTuberId)) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    LoadPngTubersForSelectedGroup();
+    SetStatus("Deleted PNGTuber " + pngTuberName.ToStdString() + ".");
+}
+
+void MainWindow::OnSavePngTuber(wxCommandEvent&)
+{
+    SaveSelectedPngTuber(true);
+}
+
+void MainWindow::OnMainWindowClose(wxCloseEvent& event)
+{
+    streamKit_->Stop();
+    if (logWindow_) {
+        logWindow_->Destroy();
+        logWindow_ = nullptr;
+        logText_ = nullptr;
+    }
+    event.Skip();
 }
 
 void MainWindow::OnStartStreamKit(wxCommandEvent&)

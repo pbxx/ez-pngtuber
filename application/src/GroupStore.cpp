@@ -72,6 +72,42 @@ std::vector<StreamKitGroup> GroupStore::ListGroups() const
     return groups;
 }
 
+std::vector<PngTuberConfig> GroupStore::ListPngTubersForGroup(int groupId) const
+{
+    std::vector<PngTuberConfig> pngTubers;
+    if (!db_) {
+        return pngTubers;
+    }
+
+    sqlite3_stmt* statement = nullptr;
+    const char* sql =
+        "SELECT id, group_id, name, closed_mouth_open_eyes_path, closed_mouth_closed_eyes_path, "
+        "open_mouth_open_eyes_path, open_mouth_closed_eyes_path, mute_path "
+        "FROM pngtubers WHERE group_id = ? ORDER BY name COLLATE NOCASE, id";
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(db_), sql, -1, &statement, nullptr) != SQLITE_OK) {
+        SetLastError("Could not list PNGTubers.");
+        return pngTubers;
+    }
+
+    sqlite3_bind_int(statement, 1, groupId);
+
+    while (sqlite3_step(statement) == SQLITE_ROW) {
+        PngTuberConfig pngTuber;
+        pngTuber.id = sqlite3_column_int(statement, 0);
+        pngTuber.groupId = sqlite3_column_int(statement, 1);
+        pngTuber.name = reinterpret_cast<const char*>(sqlite3_column_text(statement, 2));
+        pngTuber.closedMouthOpenEyesPath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 3));
+        pngTuber.closedMouthClosedEyesPath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 4));
+        pngTuber.openMouthOpenEyesPath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 5));
+        pngTuber.openMouthClosedEyesPath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 6));
+        pngTuber.mutePath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 7));
+        pngTubers.push_back(std::move(pngTuber));
+    }
+
+    sqlite3_finalize(statement);
+    return pngTubers;
+}
+
 std::optional<int> GroupStore::GetActiveGroupId() const
 {
     if (!db_) {
@@ -224,6 +260,87 @@ bool GroupStore::DeleteGroup(int groupId)
     return EnsureDefaultGroup();
 }
 
+std::optional<PngTuberConfig> GroupStore::CreatePngTuber(int groupId, const std::string& name)
+{
+    if (!db_) {
+        return std::nullopt;
+    }
+
+    sqlite3_stmt* statement = nullptr;
+    const char* sql =
+        "INSERT INTO pngtubers("
+        "group_id, name, closed_mouth_open_eyes_path, closed_mouth_closed_eyes_path, "
+        "open_mouth_open_eyes_path, open_mouth_closed_eyes_path, mute_path"
+        ") VALUES(?, ?, '', '', '', '', '')";
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(db_), sql, -1, &statement, nullptr) != SQLITE_OK) {
+        SetLastError("Could not create the PNGTuber.");
+        return std::nullopt;
+    }
+
+    sqlite3_bind_int(statement, 1, groupId);
+    sqlite3_bind_text(statement, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+    const bool ok = StepDone(statement);
+    sqlite3_finalize(statement);
+    if (!ok) {
+        SetLastError("Could not create the PNGTuber. Names must be unique within a group.");
+        return std::nullopt;
+    }
+
+    PngTuberConfig pngTuber;
+    pngTuber.id = static_cast<int>(sqlite3_last_insert_rowid(static_cast<sqlite3*>(db_)));
+    pngTuber.groupId = groupId;
+    pngTuber.name = name;
+    return pngTuber;
+}
+
+bool GroupStore::UpdatePngTuber(const PngTuberConfig& pngTuber)
+{
+    if (!db_) {
+        return false;
+    }
+
+    sqlite3_stmt* statement = nullptr;
+    const char* sql =
+        "UPDATE pngtubers SET name = ?, closed_mouth_open_eyes_path = ?, "
+        "closed_mouth_closed_eyes_path = ?, open_mouth_open_eyes_path = ?, "
+        "open_mouth_closed_eyes_path = ?, mute_path = ? WHERE id = ? AND group_id = ?";
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(db_), sql, -1, &statement, nullptr) != SQLITE_OK) {
+        return SetLastError("Could not save the PNGTuber.");
+    }
+
+    sqlite3_bind_text(statement, 1, pngTuber.name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 2, pngTuber.closedMouthOpenEyesPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 3, pngTuber.closedMouthClosedEyesPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 4, pngTuber.openMouthOpenEyesPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 5, pngTuber.openMouthClosedEyesPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 6, pngTuber.mutePath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(statement, 7, pngTuber.id);
+    sqlite3_bind_int(statement, 8, pngTuber.groupId);
+    const bool ok = StepDone(statement) && sqlite3_changes(static_cast<sqlite3*>(db_)) > 0;
+    sqlite3_finalize(statement);
+
+    return ok ? true : SetLastError("Could not save the PNGTuber. Names must be unique within a group.");
+}
+
+bool GroupStore::DeletePngTuber(int pngTuberId)
+{
+    if (!db_) {
+        return false;
+    }
+
+    sqlite3_stmt* statement = nullptr;
+    const char* sql = "DELETE FROM pngtubers WHERE id = ?";
+    if (sqlite3_prepare_v2(static_cast<sqlite3*>(db_), sql, -1, &statement, nullptr) != SQLITE_OK) {
+        return SetLastError("Could not delete the PNGTuber.");
+    }
+
+    sqlite3_bind_int(statement, 1, pngTuberId);
+    const bool ok = StepDone(statement) && sqlite3_changes(static_cast<sqlite3*>(db_)) > 0;
+    sqlite3_finalize(statement);
+
+    return ok ? true : SetLastError("Could not delete the PNGTuber.");
+}
+
 bool GroupStore::Open()
 {
     sqlite3* database = nullptr;
@@ -238,6 +355,7 @@ bool GroupStore::Open()
     }
 
     db_ = database;
+    sqlite3_exec(database, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);
     return InitializeSchema() && EnsureDefaultGroup();
 }
 
@@ -256,6 +374,18 @@ bool GroupStore::InitializeSchema()
         "CREATE TABLE IF NOT EXISTS app_settings ("
         "key TEXT PRIMARY KEY,"
         "value TEXT NOT NULL"
+        ");"
+        "CREATE TABLE IF NOT EXISTS pngtubers ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "group_id INTEGER NOT NULL,"
+        "name TEXT NOT NULL,"
+        "closed_mouth_open_eyes_path TEXT NOT NULL DEFAULT '',"
+        "closed_mouth_closed_eyes_path TEXT NOT NULL DEFAULT '',"
+        "open_mouth_open_eyes_path TEXT NOT NULL DEFAULT '',"
+        "open_mouth_closed_eyes_path TEXT NOT NULL DEFAULT '',"
+        "mute_path TEXT NOT NULL DEFAULT '',"
+        "UNIQUE(group_id, name),"
+        "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE"
         ");";
 
     char* errorMessage = nullptr;
