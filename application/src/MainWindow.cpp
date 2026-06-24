@@ -26,7 +26,8 @@ enum MenuIds {
     IdMonitorChannel,
     IdStartStreamKit,
     IdStartStreamKitVisible,
-    IdStopStreamKit
+    IdStopStreamKit,
+    IdShowLogs
 };
 
 wxString BoolText(bool value)
@@ -67,6 +68,8 @@ void MainWindow::BuildMenu()
     auto* streamKitMenu = new wxMenu();
     streamKitMenu->Append(IdStartStreamKit, "&Start Overlay Monitor\tCtrl+K");
     streamKitMenu->Append(IdStopStreamKit, "S&top Overlay Monitor");
+    streamKitMenu->AppendSeparator();
+    streamKitMenu->Append(IdShowLogs, "Show &Logs");
 
     auto* helpMenu = new wxMenu();
     helpMenu->Append(wxID_ABOUT, "&About");
@@ -85,6 +88,7 @@ void MainWindow::BuildMenu()
     Bind(wxEVT_MENU, &MainWindow::OnMonitorChannel, this, IdMonitorChannel);
     Bind(wxEVT_MENU, &MainWindow::OnStartStreamKit, this, IdStartStreamKit);
     Bind(wxEVT_MENU, &MainWindow::OnStopStreamKit, this, IdStopStreamKit);
+    Bind(wxEVT_MENU, &MainWindow::OnShowLogs, this, IdShowLogs);
     Bind(wxEVT_MENU, &MainWindow::OnExit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainWindow::OnAbout, this, wxID_ABOUT);
 }
@@ -170,15 +174,6 @@ void MainWindow::BuildDiscordPanel()
     voiceUsersList_->AppendColumn("Self Deafened", wxLIST_FORMAT_LEFT, 110);
     voiceUsersList_->AppendColumn("Volume", wxLIST_FORMAT_RIGHT, 80);
 
-    logText_ = new wxTextCtrl(
-        panel,
-        wxID_ANY,
-        "",
-        wxDefaultPosition,
-        wxSize(-1, 140),
-        wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP
-    );
-
     outer->Add(titleLabel, 0, wxLEFT | wxRIGHT | wxTOP, 16);
     outer->Add(statusLabel_, 0, wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, 16);
     rpcOuter->Add(authBox, 0, wxEXPAND | wxALL, 10);
@@ -190,8 +185,6 @@ void MainWindow::BuildDiscordPanel()
     outer->Add(voiceUsersTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
     outer->Add(voiceUsersSummaryLabel_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     outer->Add(voiceUsersList_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 16);
-    outer->Add(new wxStaticText(panel, wxID_ANY, "Logs"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
-    outer->Add(logText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 16);
 
     panel->SetSizer(outer);
 }
@@ -242,12 +235,15 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
     auto* startButton = new wxButton(panel, IdStartStreamKit, "Start Overlay Monitor");
     auto* startVisibleButton = new wxButton(panel, IdStartStreamKitVisible, "Start With Browser Window");
     auto* stopButton = new wxButton(panel, IdStopStreamKit, "Stop");
+    auto* logsButton = new wxButton(panel, IdShowLogs, "Show Logs");
     startButton->Bind(wxEVT_BUTTON, &MainWindow::OnStartStreamKit, this);
     startVisibleButton->Bind(wxEVT_BUTTON, &MainWindow::OnStartStreamKitVisible, this);
     stopButton->Bind(wxEVT_BUTTON, &MainWindow::OnStopStreamKit, this);
+    logsButton->Bind(wxEVT_BUTTON, &MainWindow::OnShowLogs, this);
     buttons->Add(startButton, 0, wxRIGHT, 8);
     buttons->Add(startVisibleButton, 0, wxRIGHT, 8);
     buttons->Add(stopButton, 0);
+    buttons->Add(logsButton, 0, wxLEFT, 8);
 
     box->Add(grid, 0, wxEXPAND | wxALL, 10);
     box->Add(showBrowserWindowCheck_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -393,10 +389,30 @@ void MainWindow::OnStopStreamKit(wxCommandEvent&)
     SetStatus("Stopped StreamKit overlay monitor.");
 }
 
+void MainWindow::OnShowLogs(wxCommandEvent&)
+{
+    ShowLogsWindow();
+}
+
+void MainWindow::OnLogWindowClose(wxCloseEvent& event)
+{
+    if (logWindow_) {
+        logWindow_->Hide();
+        event.Veto();
+    } else {
+        event.Skip();
+    }
+}
+
 void MainWindow::OnExit(wxCommandEvent&)
 {
     streamKit_->Stop();
     discord_->Disconnect();
+    if (logWindow_) {
+        logWindow_->Destroy();
+        logWindow_ = nullptr;
+        logText_ = nullptr;
+    }
     Close(true);
 }
 
@@ -420,10 +436,6 @@ void MainWindow::SetStatus(const std::string& status)
 
 void MainWindow::AppendLog(const std::string& message)
 {
-    if (!logText_) {
-        return;
-    }
-
     const auto now = std::chrono::system_clock::now();
     const auto time = std::chrono::system_clock::to_time_t(now);
     std::tm localTime{};
@@ -435,7 +447,43 @@ void MainWindow::AppendLog(const std::string& message)
 
     std::ostringstream line;
     line << std::put_time(&localTime, "%H:%M:%S") << "  " << message << "\n";
-    logText_->AppendText(line.str());
+    logLines_.push_back(line.str());
+
+    constexpr size_t MaxLogLines = 1000;
+    if (logLines_.size() > MaxLogLines) {
+        logLines_.erase(logLines_.begin(), logLines_.begin() + static_cast<std::ptrdiff_t>(logLines_.size() - MaxLogLines));
+    }
+
+    if (logText_) {
+        logText_->AppendText(line.str());
+    }
+}
+
+void MainWindow::ShowLogsWindow()
+{
+    if (!logWindow_) {
+        logWindow_ = new wxFrame(this, wxID_ANY, "EZ PNGTuber Logs", wxDefaultPosition, wxSize(900, 420));
+        auto* panel = new wxPanel(logWindow_);
+        auto* layout = new wxBoxSizer(wxVERTICAL);
+        logText_ = new wxTextCtrl(
+            panel,
+            wxID_ANY,
+            "",
+            wxDefaultPosition,
+            wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP
+        );
+        layout->Add(logText_, 1, wxEXPAND | wxALL, 8);
+        panel->SetSizer(layout);
+        logWindow_->Bind(wxEVT_CLOSE_WINDOW, &MainWindow::OnLogWindowClose, this);
+    }
+
+    logText_->Clear();
+    for (const auto& line : logLines_) {
+        logText_->AppendText(line);
+    }
+    logWindow_->Show();
+    logWindow_->Raise();
 }
 
 void MainWindow::SetGuilds(std::vector<DiscordGuild> guilds)

@@ -14,11 +14,13 @@
 #include <wx/listctrl.h>
 
 class wxCommandEvent;
+class wxCloseEvent;
 class wxTextCtrl;
 class wxStaticText;
 class wxNotebook;
 class wxCheckBox;
 class wxSpinCtrl;
+class wxFrame;
 
 class MainWindow final : public wxFrame {
 public:
@@ -38,10 +40,13 @@ private:
     void OnStartStreamKit(wxCommandEvent& event);
     void OnStartStreamKitVisible(wxCommandEvent& event);
     void OnStopStreamKit(wxCommandEvent& event);
+    void OnShowLogs(wxCommandEvent& event);
+    void OnLogWindowClose(wxCloseEvent& event);
     void OnExit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
     void SetStatus(const std::string& status);
     void AppendLog(const std::string& message);
+    void ShowLogsWindow();
     void SetGuilds(std::vector<DiscordGuild> guilds);
     void SetChannels(std::vector<DiscordChannel> channels);
     void SetVoiceUsers(std::vector<DiscordVoiceUser> users);
@@ -66,6 +71,7 @@ private:
     wxCheckBox* showBrowserWindowCheck_ = nullptr;
     wxCheckBox* bypassLocalNetworkPromptCheck_ = nullptr;
     wxSpinCtrl* pollIntervalSpin_ = nullptr;
+    wxFrame* logWindow_ = nullptr;
     wxTextCtrl* logText_ = nullptr;
 
     std::unique_ptr<DiscordRpcClient> discord_;
@@ -73,5 +79,6 @@ private:
     std::vector<StreamKitMonitor::BrowserCandidate> browsers_;
     std::vector<DiscordGuild> guilds_;
     std::vector<DiscordChannel> channels_;
+    std::vector<std::string> logLines_;
     std::unordered_map<std::string, DiscordVoiceUser> voiceUsers_;
 };
