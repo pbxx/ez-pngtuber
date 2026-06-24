@@ -25,8 +25,6 @@ endif()
 add_executable(ez-pngtuber
     src/main.cpp
     src/DiscordModels.h
-    src/DiscordRpcClient.cpp
-    src/DiscordRpcClient.h
     src/MainWindow.cpp
     src/MainWindow.h
     src/StreamKitMonitor.cpp

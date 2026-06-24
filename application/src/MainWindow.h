@@ -1,7 +1,6 @@
 #pragma once
 
 #include "DiscordModels.h"
-#include "DiscordRpcClient.h"
 #include "StreamKitMonitor.h"
 
 #include <memory>
@@ -28,15 +27,9 @@ public:
 
 private:
     void BuildMenu();
-    void BuildDiscordPanel();
+    void BuildMainPanel();
     void BuildStreamKitPanel(wxNotebook* notebook);
-    void WireDiscordCallbacks();
     void WireStreamKitCallbacks();
-    void OnDiscordConnect(wxCommandEvent& event);
-    void OnDiscordDisconnect(wxCommandEvent& event);
-    void OnRefreshServers(wxCommandEvent& event);
-    void OnGuildSelected(wxCommandEvent& event);
-    void OnMonitorChannel(wxCommandEvent& event);
     void OnStartStreamKit(wxCommandEvent& event);
     void OnStartStreamKitVisible(wxCommandEvent& event);
     void OnStopStreamKit(wxCommandEvent& event);
@@ -47,22 +40,10 @@ private:
     void SetStatus(const std::string& status);
     void AppendLog(const std::string& message);
     void ShowLogsWindow();
-    void SetGuilds(std::vector<DiscordGuild> guilds);
-    void SetChannels(std::vector<DiscordChannel> channels);
     void SetVoiceUsers(std::vector<DiscordVoiceUser> users);
-    void UpsertVoiceUser(DiscordVoiceUser user);
-    void RemoveVoiceUser(const std::string& userId);
-    void SetSpeaking(const std::string& userId, bool speaking);
     void RenderVoiceUsers();
-    std::string SelectedGuildId() const;
-    std::string SelectedChannelId() const;
 
     wxStaticText* statusLabel_ = nullptr;
-    wxTextCtrl* clientIdText_ = nullptr;
-    wxTextCtrl* clientSecretText_ = nullptr;
-    wxTextCtrl* accessTokenText_ = nullptr;
-    wxChoice* guildChoice_ = nullptr;
-    wxChoice* channelChoice_ = nullptr;
     wxListCtrl* voiceUsersList_ = nullptr;
     wxStaticText* voiceUsersSummaryLabel_ = nullptr;
     wxTextCtrl* streamKitUrlText_ = nullptr;
@@ -74,11 +55,8 @@ private:
     wxFrame* logWindow_ = nullptr;
     wxTextCtrl* logText_ = nullptr;
 
-    std::unique_ptr<DiscordRpcClient> discord_;
     std::unique_ptr<StreamKitMonitor> streamKit_;
     std::vector<StreamKitMonitor::BrowserCandidate> browsers_;
-    std::vector<DiscordGuild> guilds_;
-    std::vector<DiscordChannel> channels_;
     std::vector<std::string> logLines_;
     std::unordered_map<std::string, DiscordVoiceUser> voiceUsers_;
 };
