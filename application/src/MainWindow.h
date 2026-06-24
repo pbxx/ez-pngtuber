@@ -1,9 +1,11 @@
 #pragma once
 
 #include "DiscordModels.h"
+#include "GroupStore.h"
 #include "StreamKitMonitor.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +20,7 @@ class wxTextCtrl;
 class wxStaticText;
 class wxNotebook;
 class wxCheckBox;
+class wxButton;
 class wxSpinCtrl;
 class wxFrame;
 
@@ -29,7 +32,18 @@ private:
     void BuildMenu();
     void BuildMainPanel();
     void BuildStreamKitPanel(wxNotebook* notebook);
+    void LoadGroups();
+    void SelectGroupById(int groupId);
+    void ApplyGroupToControls(const StreamKitGroup& group);
+    StreamKitGroup CollectGroupFromControls() const;
+    bool SaveSelectedGroupSettings(bool announceSuccess);
+    std::optional<int> GetSelectedGroupId() const;
     void WireStreamKitCallbacks();
+    void OnGroupSelected(wxCommandEvent& event);
+    void OnCreateGroup(wxCommandEvent& event);
+    void OnRenameGroup(wxCommandEvent& event);
+    void OnDeleteGroup(wxCommandEvent& event);
+    void OnSaveGroup(wxCommandEvent& event);
     void OnStartStreamKit(wxCommandEvent& event);
     void OnStartStreamKitVisible(wxCommandEvent& event);
     void OnStopStreamKit(wxCommandEvent& event);
@@ -47,15 +61,19 @@ private:
     wxListCtrl* voiceUsersList_ = nullptr;
     wxStaticText* voiceUsersSummaryLabel_ = nullptr;
     wxTextCtrl* streamKitUrlText_ = nullptr;
+    wxChoice* groupChoice_ = nullptr;
     wxChoice* browserChoice_ = nullptr;
     wxTextCtrl* browserPathText_ = nullptr;
     wxCheckBox* showBrowserWindowCheck_ = nullptr;
     wxCheckBox* bypassLocalNetworkPromptCheck_ = nullptr;
     wxSpinCtrl* pollIntervalSpin_ = nullptr;
+    wxButton* saveGroupButton_ = nullptr;
     wxFrame* logWindow_ = nullptr;
     wxTextCtrl* logText_ = nullptr;
 
+    std::unique_ptr<GroupStore> groupStore_;
     std::unique_ptr<StreamKitMonitor> streamKit_;
+    std::vector<StreamKitGroup> groups_;
     std::vector<StreamKitMonitor::BrowserCandidate> browsers_;
     std::vector<std::string> logLines_;
     std::unordered_map<std::string, DiscordVoiceUser> voiceUsers_;

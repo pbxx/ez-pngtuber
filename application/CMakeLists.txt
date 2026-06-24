@@ -13,6 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(wxWidgets CONFIG QUIET COMPONENTS core base)
 find_package(CURL CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 if(wxWidgets_FOUND)
     set(EZ_PNGTUBER_WX_LIBRARIES wx::core wx::base)
@@ -24,7 +25,11 @@ endif()
 
 add_executable(ez-pngtuber
     src/main.cpp
+    src/AppPaths.cpp
+    src/AppPaths.h
     src/DiscordModels.h
+    src/GroupStore.cpp
+    src/GroupStore.h
     src/MainWindow.cpp
     src/MainWindow.h
     src/StreamKitMonitor.cpp
@@ -36,6 +41,7 @@ target_link_libraries(ez-pngtuber
         ${EZ_PNGTUBER_WX_LIBRARIES}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        unofficial::sqlite3::sqlite3
 )
 
 if(WIN32)

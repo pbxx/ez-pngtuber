@@ -17,13 +17,19 @@
 #include <wx/stattext.h>
 #include <wx/statusbr.h>
 #include <wx/textctrl.h>
+#include <wx/textdlg.h>
 
 namespace {
 enum MenuIds {
     IdStartStreamKit = wxID_HIGHEST + 1,
     IdStartStreamKitVisible,
     IdStopStreamKit,
-    IdShowLogs
+    IdShowLogs,
+    IdGroupChoice,
+    IdCreateGroup,
+    IdRenameGroup,
+    IdDeleteGroup,
+    IdSaveGroup
 };
 
 wxString BoolText(bool value)
@@ -39,6 +45,7 @@ wxString SpeakingText(bool value)
 
 MainWindow::MainWindow()
     : wxFrame(nullptr, wxID_ANY, "EZ PNGTuber 0.1.0", wxDefaultPosition, wxSize(980, 680)),
+      groupStore_(std::make_unique<GroupStore>()),
       streamKit_(std::make_unique<StreamKitMonitor>())
 {
     BuildMenu();
@@ -91,6 +98,28 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
 {
     auto* panel = new wxPanel(notebook);
     auto* outer = new wxBoxSizer(wxVERTICAL);
+
+    auto* groupsBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Groups");
+    auto* groupsRow = new wxBoxSizer(wxHORIZONTAL);
+    groupChoice_ = new wxChoice(panel, IdGroupChoice);
+    auto* createGroupButton = new wxButton(panel, IdCreateGroup, "New Group");
+    auto* renameGroupButton = new wxButton(panel, IdRenameGroup, "Rename");
+    auto* deleteGroupButton = new wxButton(panel, IdDeleteGroup, "Delete");
+    saveGroupButton_ = new wxButton(panel, IdSaveGroup, "Save Group");
+
+    groupChoice_->Bind(wxEVT_CHOICE, &MainWindow::OnGroupSelected, this);
+    createGroupButton->Bind(wxEVT_BUTTON, &MainWindow::OnCreateGroup, this);
+    renameGroupButton->Bind(wxEVT_BUTTON, &MainWindow::OnRenameGroup, this);
+    deleteGroupButton->Bind(wxEVT_BUTTON, &MainWindow::OnDeleteGroup, this);
+    saveGroupButton_->Bind(wxEVT_BUTTON, &MainWindow::OnSaveGroup, this);
+
+    groupsRow->Add(new wxStaticText(panel, wxID_ANY, "Active Group"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    groupsRow->Add(groupChoice_, 1, wxRIGHT, 8);
+    groupsRow->Add(createGroupButton, 0, wxRIGHT, 8);
+    groupsRow->Add(renameGroupButton, 0, wxRIGHT, 8);
+    groupsRow->Add(deleteGroupButton, 0, wxRIGHT, 8);
+    groupsRow->Add(saveGroupButton_, 0);
+    groupsBox->Add(groupsRow, 0, wxEXPAND | wxALL, 8);
 
     auto* settingsBox = new wxStaticBoxSizer(wxVERTICAL, panel, "StreamKit Overlay");
     auto* grid = new wxFlexGridSizer(4, 2, 6, 8);
@@ -166,10 +195,142 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
     usersBox->Add(voiceUsersSummaryLabel_, 0, wxEXPAND | wxALL, 8);
     usersBox->Add(voiceUsersList_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
+    LoadGroups();
+
+    outer->Add(groupsBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
     outer->Add(settingsBox, 0, wxEXPAND | wxALL, 8);
     outer->Add(usersBox, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
     panel->SetSizer(outer);
     notebook->AddPage(panel, "StreamKit Overlay");
+}
+
+void MainWindow::LoadGroups()
+{
+    groups_.clear();
+    groupChoice_->Clear();
+
+    if (!groupStore_ || !groupStore_->IsReady()) {
+        SetStatus("Groups database is unavailable.");
+        return;
+    }
+
+    groups_ = groupStore_->ListGroups();
+    for (const auto& group : groups_) {
+        groupChoice_->Append(group.name);
+    }
+
+    if (groups_.empty()) {
+        SetStatus("No groups are available.");
+        return;
+    }
+
+    const auto activeGroupId = groupStore_->GetActiveGroupId();
+    SelectGroupById(activeGroupId.value_or(groups_.front().id));
+}
+
+void MainWindow::SelectGroupById(int groupId)
+{
+    for (size_t index = 0; index < groups_.size(); ++index) {
+        if (groups_[index].id == groupId) {
+            groupChoice_->SetSelection(static_cast<int>(index));
+            ApplyGroupToControls(groups_[index]);
+            groupStore_->SetActiveGroup(groupId);
+            return;
+        }
+    }
+
+    if (!groups_.empty()) {
+        groupChoice_->SetSelection(0);
+        ApplyGroupToControls(groups_.front());
+        groupStore_->SetActiveGroup(groups_.front().id);
+    }
+}
+
+void MainWindow::ApplyGroupToControls(const StreamKitGroup& group)
+{
+    streamKitUrlText_->SetValue(group.overlayUrl);
+    showBrowserWindowCheck_->SetValue(group.showBrowserWindow);
+    bypassLocalNetworkPromptCheck_->SetValue(group.bypassLocalNetworkPrompt);
+    pollIntervalSpin_->SetValue(group.pollIntervalMs > 0 ? group.pollIntervalMs : 250);
+
+    std::string effectiveBrowserPath = group.browserPath;
+    int matchedBrowserIndex = wxNOT_FOUND;
+    for (size_t index = 0; index < browsers_.size(); ++index) {
+        if (browsers_[index].path == effectiveBrowserPath) {
+            matchedBrowserIndex = static_cast<int>(index);
+            break;
+        }
+    }
+
+    if (effectiveBrowserPath.empty() && !browsers_.empty()) {
+        matchedBrowserIndex = 0;
+        effectiveBrowserPath = browsers_.front().path;
+    }
+
+    browserPathText_->SetValue(effectiveBrowserPath);
+    browserChoice_->SetSelection(matchedBrowserIndex);
+}
+
+StreamKitGroup MainWindow::CollectGroupFromControls() const
+{
+    StreamKitGroup group;
+    if (const auto selectedGroupId = GetSelectedGroupId()) {
+        group.id = *selectedGroupId;
+    }
+
+    const int selection = groupChoice_ ? groupChoice_->GetSelection() : wxNOT_FOUND;
+    if (selection != wxNOT_FOUND && static_cast<size_t>(selection) < groups_.size()) {
+        group.name = groups_[selection].name;
+    }
+
+    group.overlayUrl = streamKitUrlText_->GetValue().ToStdString();
+    group.browserPath = browserPathText_->GetValue().ToStdString();
+    group.showBrowserWindow = showBrowserWindowCheck_->GetValue();
+    group.bypassLocalNetworkPrompt = bypassLocalNetworkPromptCheck_->GetValue();
+    group.pollIntervalMs = pollIntervalSpin_->GetValue();
+    return group;
+}
+
+bool MainWindow::SaveSelectedGroupSettings(bool announceSuccess)
+{
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId) {
+        SetStatus("Select a group first.");
+        return false;
+    }
+
+    auto group = CollectGroupFromControls();
+    group.id = *selectedGroupId;
+    if (!groupStore_->UpdateGroup(group)) {
+        SetStatus(groupStore_->GetLastError());
+        return false;
+    }
+
+    for (auto& existingGroup : groups_) {
+        if (existingGroup.id == group.id) {
+            existingGroup = group;
+            break;
+        }
+    }
+
+    if (announceSuccess) {
+        SetStatus("Saved group settings for " + group.name + ".");
+    }
+    return true;
+}
+
+std::optional<int> MainWindow::GetSelectedGroupId() const
+{
+    if (!groupChoice_) {
+        return std::nullopt;
+    }
+
+    const int selection = groupChoice_->GetSelection();
+    if (selection == wxNOT_FOUND || static_cast<size_t>(selection) >= groups_.size()) {
+        return std::nullopt;
+    }
+
+    return groups_[selection].id;
 }
 
 void MainWindow::WireStreamKitCallbacks()
@@ -188,8 +349,127 @@ void MainWindow::WireStreamKitCallbacks()
     });
 }
 
+void MainWindow::OnGroupSelected(wxCommandEvent&)
+{
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId) {
+        return;
+    }
+
+    groupStore_->SetActiveGroup(*selectedGroupId);
+    for (const auto& group : groups_) {
+        if (group.id == *selectedGroupId) {
+            ApplyGroupToControls(group);
+            SetStatus("Loaded group " + group.name + ".");
+            break;
+        }
+    }
+}
+
+void MainWindow::OnCreateGroup(wxCommandEvent&)
+{
+    wxTextEntryDialog dialog(this, "Enter a name for the new group.", "New Group");
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const wxString groupName = dialog.GetValue().Trim(true).Trim(false);
+    if (groupName.empty()) {
+        SetStatus("Group name cannot be empty.");
+        return;
+    }
+
+    auto group = groupStore_->CreateGroup(groupName.ToStdString());
+    if (!group) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    auto settings = CollectGroupFromControls();
+    settings.id = group->id;
+    settings.name = group->name;
+    if (!groupStore_->UpdateGroup(settings)) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    LoadGroups();
+    SelectGroupById(group->id);
+    SetStatus("Created group " + group->name + ".");
+}
+
+void MainWindow::OnRenameGroup(wxCommandEvent&)
+{
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId) {
+        SetStatus("Select a group first.");
+        return;
+    }
+
+    const int selection = groupChoice_->GetSelection();
+    wxString currentName;
+    if (selection != wxNOT_FOUND) {
+        currentName = groupChoice_->GetString(selection);
+    }
+    wxTextEntryDialog dialog(this, "Enter a new name for this group.", "Rename Group", currentName);
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const wxString groupName = dialog.GetValue().Trim(true).Trim(false);
+    if (groupName.empty()) {
+        SetStatus("Group name cannot be empty.");
+        return;
+    }
+
+    if (!groupStore_->RenameGroup(*selectedGroupId, groupName.ToStdString())) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    LoadGroups();
+    SelectGroupById(*selectedGroupId);
+    SetStatus("Renamed group to " + groupName.ToStdString() + ".");
+}
+
+void MainWindow::OnDeleteGroup(wxCommandEvent&)
+{
+    const auto selectedGroupId = GetSelectedGroupId();
+    if (!selectedGroupId) {
+        SetStatus("Select a group first.");
+        return;
+    }
+
+    const int selection = groupChoice_->GetSelection();
+    wxString groupName = "this group";
+    if (selection != wxNOT_FOUND) {
+        groupName = groupChoice_->GetString(selection);
+    }
+    if (wxMessageBox(
+            "Delete group \"" + groupName + "\"?",
+            "Delete Group",
+            wxYES_NO | wxICON_WARNING,
+            this) != wxYES) {
+        return;
+    }
+
+    if (!groupStore_->DeleteGroup(*selectedGroupId)) {
+        SetStatus(groupStore_->GetLastError());
+        return;
+    }
+
+    LoadGroups();
+    SetStatus("Deleted group " + groupName.ToStdString() + ".");
+}
+
+void MainWindow::OnSaveGroup(wxCommandEvent&)
+{
+    SaveSelectedGroupSettings(true);
+}
+
 void MainWindow::OnStartStreamKit(wxCommandEvent&)
 {
+    SaveSelectedGroupSettings(false);
     voiceUsers_.clear();
     RenderVoiceUsers();
     streamKit_->Start(
@@ -204,6 +484,7 @@ void MainWindow::OnStartStreamKit(wxCommandEvent&)
 void MainWindow::OnStartStreamKitVisible(wxCommandEvent&)
 {
     showBrowserWindowCheck_->SetValue(true);
+    SaveSelectedGroupSettings(false);
     voiceUsers_.clear();
     RenderVoiceUsers();
     streamKit_->Start(
@@ -363,4 +644,3 @@ void MainWindow::RenderVoiceUsers()
         }
     }
 }
-

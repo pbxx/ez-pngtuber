@@ -1,79 +1,67 @@
 # EZ PNGTuber C++ App
 
-wxWidgets boilerplate for the EZ PNGTuber desktop app.
+wxWidgets desktop prototype for monitoring Discord StreamKit voice overlay state.
+
+## What It Does
+
+The app monitors a Discord StreamKit voice overlay without requiring a Discord Developer Portal application, client secret, access token, Node sidecar, or bundled browser.
+
+Current flow:
+
+1. Configure/copy a Discord StreamKit voice overlay URL.
+2. Paste it into the `StreamKit Overlay` tab.
+3. Pick or create a group for that setup.
+4. Choose a detected Chromium-family browser, or paste a browser executable path.
+5. Save the group or start the monitor.
+
+EZ PNGTuber launches the selected browser with a dedicated app profile, attaches to its local Chrome DevTools endpoint, and polls the rendered overlay DOM for users and speaking state.
+
+## Features
+
+- Detects common Chromium-family browsers on Windows.
+- Supports headless monitoring or a visible browser window for debugging.
+- Uses a persistent browser profile at `%LOCALAPPDATA%\EZ PNGTuber\StreamKitBrowserProfile`.
+- Stores StreamKit groups in `%LOCALAPPDATA%\EZ PNGTuber\groups.db`.
+- Includes an optional prompt-bypass flag bundle for Chromium private/local-network access prompts.
+- Displays users in call and speaking status in the main table.
+- Provides a pop-out logs window for browser launch and DevTools diagnostics.
+- Poll interval is configurable from the UI.
 
 ## Requirements
 
 - CMake 3.24 or newer
-- A C++20 compiler:
-  - Windows: MSVC 2022 or MinGW-w64 GCC
-  - Linux: GCC or Clang
-- wxWidgets 3.2 or newer
-
-You can provide wxWidgets with a system install, MSYS2, Linux distro packages, or vcpkg.
+- C++20 compiler:
+  - Windows: MSVC 2022
+  - Other platforms may require more work; the browser launcher currently targets Windows APIs.
+- A Chromium-family browser such as Microsoft Edge, Google Chrome, or Brave.
+- vcpkg or equivalent dependencies:
+  - `curl`
+  - `nlohmann-json`
+  - `wxwidgets`
 
 ## Build
-
-From this directory:
-
-```sh
-cmake --preset ninja-debug
-cmake --build --preset ninja-debug
-```
 
 With Visual Studio 2022 on Windows:
 
 ```powershell
 cmake --preset msvc-debug
-cmake --build --preset msvc-debug
+cmake --build --preset msvc-debug --config Debug
 ```
 
-If CMake cannot find wxWidgets, pass its install prefix:
-
-```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/wxwidgets
-```
-
-For MSYS2 UCRT64, the prefix is usually:
+The helper script from the repository root also configures/builds the MSVC preset:
 
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=C:/msys64/ucrt64
+powershell -ExecutionPolicy Bypass -File scripts\build-msvc.ps1
 ```
 
 ## vcpkg
 
-This directory includes a `vcpkg.json` manifest with `curl`, `nlohmann-json`, and `wxwidgets`.
-When configuring with a vcpkg toolchain file, vcpkg can install the dependency for the active triplet:
+This directory includes a `vcpkg.json` manifest. When configuring with a vcpkg toolchain file, vcpkg can install the dependency set for the active triplet.
 
-```sh
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build
-```
+Use a full vcpkg checkout from `https://github.com/microsoft/vcpkg`. The Visual Studio-bundled vcpkg under `VC/vcpkg` may not include the built-in ports registry needed for manifest installs.
 
-Use a full vcpkg checkout from `https://github.com/microsoft/vcpkg`.
-The Visual Studio-bundled vcpkg under `VC/vcpkg` may not include the built-in ports registry needed for manifest installs.
+## Notes
 
-## Discord RPC
-
-The app includes a Discord voice monitor prototype using Discord's local RPC IPC server.
-
-1. Create a Discord application in the Developer Portal.
-2. Add yourself as a tester while the app is unapproved for RPC access.
-3. Start the Discord desktop client.
-4. Run EZ PNGTuber, open `Discord > Connect / Authenticate`, enter the application client ID, and either:
-   - enter a Discord OAuth access token with `rpc identify` scopes, or
-   - enter the client secret so the app can exchange the RPC authorization code locally.
-5. Pick a server, pick a voice channel, then use `Monitor Voice Channel`.
-
-Discord's RPC API is local-client based. It can list guilds/channels visible to the authenticated Discord user and subscribe to voice-state and speaking events for a selected channel.
-
-## StreamKit Overlay Monitoring
-
-For a no-Developer-Portal flow, use the `StreamKit Overlay` tab:
-
-1. Configure a Discord StreamKit voice overlay URL in a browser or OBS-style flow.
-2. Paste the overlay URL into EZ PNGTuber.
-3. Choose a detected Chromium-family browser, or paste a browser executable path.
-4. Start the overlay monitor.
-
-EZ PNGTuber launches the selected browser headlessly, attaches through the browser's local DevTools endpoint, and polls the rendered StreamKit overlay DOM for present users and speaking state. This avoids asking users for Discord client secrets or access tokens, but it can only observe state that the overlay renders.
+- The app intentionally does not use Discord RPC authentication in the UI. StreamKit is the active path.
+- The optional `Bypass local app prompt` setting uses experimental Chromium flags. If Chromium ignores those flags in a future version, run once with `Start With Browser Window` and allow the StreamKit local-app prompt; the dedicated profile should remember that decision.
+- The table can only show what the StreamKit overlay renders. Hidden Discord state is not available through this approach.

@@ -1,4 +1,5 @@
 #include "StreamKitMonitor.h"
+#include "AppPaths.h"
 
 #include <algorithm>
 #include <array>
@@ -144,13 +145,6 @@ int PickDebuggingPort()
 {
     return 18000 + static_cast<int>(GetCurrentProcessId() % 20000);
 }
-
-std::string StreamKitProfilePath()
-{
-    wchar_t localAppData[MAX_PATH]{};
-    SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData);
-    return Narrow(std::wstring(localAppData) + L"\\EZ PNGTuber\\StreamKitBrowserProfile");
-}
 #endif
 }
 
@@ -277,8 +271,8 @@ bool StreamKitMonitor::LaunchBrowser(const std::string& browserPath, const std::
 {
 #ifdef _WIN32
     remoteDebuggingPort_ = PickDebuggingPort();
-    const auto profilePath = StreamKitProfilePath();
-    std::filesystem::create_directories(std::filesystem::u8path(profilePath));
+    const auto profilePath = GetStreamKitProfilePath();
+    std::filesystem::create_directories(std::filesystem::path(profilePath));
 
     std::ostringstream command;
     command << QuoteArg(browserPath)
