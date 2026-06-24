@@ -33,12 +33,12 @@ public:
     void SetErrorHandler(ErrorHandler handler);
     void SetLogHandler(LogHandler handler);
     void SetUsersHandler(UsersHandler handler);
-    bool Start(std::string browserPath, std::string overlayUrl, bool showBrowserWindow);
+    bool Start(std::string browserPath, std::string overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt, int pollIntervalMs);
     void Stop();
 
 private:
-    void WorkerLoop(std::string browserPath, std::string overlayUrl, bool showBrowserWindow);
-    bool LaunchBrowser(const std::string& browserPath, const std::string& overlayUrl, bool showBrowserWindow);
+    void WorkerLoop(std::string browserPath, std::string overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt, int pollIntervalMs);
+    bool LaunchBrowser(const std::string& browserPath, const std::string& overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt);
     bool ConnectDevTools(const std::string& overlayUrl);
     bool SendEvaluateCommand();
     void ReceiveLoopOnce();

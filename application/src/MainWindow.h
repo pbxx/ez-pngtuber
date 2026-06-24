@@ -18,6 +18,7 @@ class wxTextCtrl;
 class wxStaticText;
 class wxNotebook;
 class wxCheckBox;
+class wxSpinCtrl;
 
 class MainWindow final : public wxFrame {
 public:
@@ -58,10 +59,13 @@ private:
     wxChoice* guildChoice_ = nullptr;
     wxChoice* channelChoice_ = nullptr;
     wxListCtrl* voiceUsersList_ = nullptr;
+    wxStaticText* voiceUsersSummaryLabel_ = nullptr;
     wxTextCtrl* streamKitUrlText_ = nullptr;
     wxChoice* browserChoice_ = nullptr;
     wxTextCtrl* browserPathText_ = nullptr;
     wxCheckBox* showBrowserWindowCheck_ = nullptr;
+    wxCheckBox* bypassLocalNetworkPromptCheck_ = nullptr;
+    wxSpinCtrl* pollIntervalSpin_ = nullptr;
     wxTextCtrl* logText_ = nullptr;
 
     std::unique_ptr<DiscordRpcClient> discord_;

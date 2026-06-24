@@ -12,6 +12,7 @@
 #include <wx/notebook.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/statusbr.h>
@@ -31,6 +32,11 @@ enum MenuIds {
 wxString BoolText(bool value)
 {
     return value ? "Yes" : "No";
+}
+
+wxString SpeakingText(bool value)
+{
+    return value ? "Speaking" : "Silent";
 }
 }
 
@@ -149,9 +155,15 @@ void MainWindow::BuildDiscordPanel()
     channelBox->Add(channelGrid, 0, wxEXPAND | wxALL, 10);
     channelBox->Add(monitorButton, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
 
+    auto* voiceUsersTitle = new wxStaticText(panel, wxID_ANY, "Users in Call");
+    auto voiceUsersTitleFont = voiceUsersTitle->GetFont();
+    voiceUsersTitleFont.SetWeight(wxFONTWEIGHT_BOLD);
+    voiceUsersTitle->SetFont(voiceUsersTitleFont);
+    voiceUsersSummaryLabel_ = new wxStaticText(panel, wxID_ANY, "0 users in call");
+
     voiceUsersList_ = new wxListCtrl(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     voiceUsersList_->AppendColumn("User", wxLIST_FORMAT_LEFT, 220);
-    voiceUsersList_->AppendColumn("Speaking", wxLIST_FORMAT_LEFT, 90);
+    voiceUsersList_->AppendColumn("Speaking", wxLIST_FORMAT_LEFT, 110);
     voiceUsersList_->AppendColumn("Muted", wxLIST_FORMAT_LEFT, 90);
     voiceUsersList_->AppendColumn("Deafened", wxLIST_FORMAT_LEFT, 90);
     voiceUsersList_->AppendColumn("Self Muted", wxLIST_FORMAT_LEFT, 100);
@@ -175,6 +187,8 @@ void MainWindow::BuildDiscordPanel()
     notebook->AddPage(rpcPanel, "Advanced RPC");
 
     outer->Add(notebook, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 16);
+    outer->Add(voiceUsersTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
+    outer->Add(voiceUsersSummaryLabel_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     outer->Add(voiceUsersList_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 16);
     outer->Add(new wxStaticText(panel, wxID_ANY, "Logs"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
     outer->Add(logText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 16);
@@ -187,13 +201,18 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
     auto* panel = new wxPanel(notebook);
     auto* outer = new wxBoxSizer(wxVERTICAL);
     auto* box = new wxStaticBoxSizer(wxVERTICAL, panel, "StreamKit Overlay");
-    auto* grid = new wxFlexGridSizer(3, 2, 8, 10);
+    auto* grid = new wxFlexGridSizer(4, 2, 8, 10);
     grid->AddGrowableCol(1, 1);
 
     streamKitUrlText_ = new wxTextCtrl(panel, wxID_ANY);
     browserChoice_ = new wxChoice(panel, wxID_ANY);
     browserPathText_ = new wxTextCtrl(panel, wxID_ANY);
+    pollIntervalSpin_ = new wxSpinCtrl(panel, wxID_ANY);
+    pollIntervalSpin_->SetRange(50, 5000);
+    pollIntervalSpin_->SetValue(250);
     showBrowserWindowCheck_ = new wxCheckBox(panel, wxID_ANY, "Show browser window");
+    bypassLocalNetworkPromptCheck_ = new wxCheckBox(panel, wxID_ANY, "Bypass local app prompt");
+    bypassLocalNetworkPromptCheck_->SetValue(true);
 
     browsers_ = StreamKitMonitor::DetectBrowsers();
     for (const auto& browser : browsers_) {
@@ -216,6 +235,8 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
     grid->Add(browserChoice_, 1, wxEXPAND);
     grid->Add(new wxStaticText(panel, wxID_ANY, "Browser Path"), 0, wxALIGN_CENTER_VERTICAL);
     grid->Add(browserPathText_, 1, wxEXPAND);
+    grid->Add(new wxStaticText(panel, wxID_ANY, "Poll Interval (ms)"), 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(pollIntervalSpin_, 0, wxALIGN_LEFT);
 
     auto* buttons = new wxBoxSizer(wxHORIZONTAL);
     auto* startButton = new wxButton(panel, IdStartStreamKit, "Start Overlay Monitor");
@@ -230,6 +251,7 @@ void MainWindow::BuildStreamKitPanel(wxNotebook* notebook)
 
     box->Add(grid, 0, wxEXPAND | wxALL, 10);
     box->Add(showBrowserWindowCheck_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+    box->Add(bypassLocalNetworkPromptCheck_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
     box->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
     outer->Add(box, 0, wxEXPAND | wxALL, 10);
     panel->SetSizer(outer);
@@ -345,7 +367,9 @@ void MainWindow::OnStartStreamKit(wxCommandEvent&)
     streamKit_->Start(
         browserPathText_->GetValue().ToStdString(),
         streamKitUrlText_->GetValue().ToStdString(),
-        showBrowserWindowCheck_->GetValue()
+        showBrowserWindowCheck_->GetValue(),
+        bypassLocalNetworkPromptCheck_->GetValue(),
+        pollIntervalSpin_->GetValue()
     );
 }
 
@@ -357,7 +381,9 @@ void MainWindow::OnStartStreamKitVisible(wxCommandEvent&)
     streamKit_->Start(
         browserPathText_->GetValue().ToStdString(),
         streamKitUrlText_->GetValue().ToStdString(),
-        true
+        true,
+        bypassLocalNetworkPromptCheck_->GetValue(),
+        pollIntervalSpin_->GetValue()
     );
 }
 
@@ -484,15 +510,29 @@ void MainWindow::RenderVoiceUsers()
         return left.displayName < right.displayName;
     });
 
+    const auto speakingCount = std::count_if(users.begin(), users.end(), [](const auto& user) {
+        return user.speaking;
+    });
+    if (voiceUsersSummaryLabel_) {
+        voiceUsersSummaryLabel_->SetLabel(wxString::Format(
+            "%zu user(s) in call, %zu speaking",
+            users.size(),
+            static_cast<size_t>(speakingCount)
+        ));
+    }
+
     voiceUsersList_->DeleteAllItems();
     for (const auto& user : users) {
         const long row = voiceUsersList_->InsertItem(voiceUsersList_->GetItemCount(), user.displayName);
-        voiceUsersList_->SetItem(row, 1, BoolText(user.speaking));
+        voiceUsersList_->SetItem(row, 1, SpeakingText(user.speaking));
         voiceUsersList_->SetItem(row, 2, BoolText(user.muted));
         voiceUsersList_->SetItem(row, 3, BoolText(user.deafened));
         voiceUsersList_->SetItem(row, 4, BoolText(user.selfMuted));
         voiceUsersList_->SetItem(row, 5, BoolText(user.selfDeafened));
         voiceUsersList_->SetItem(row, 6, wxString::Format("%d", user.volume));
+        if (user.speaking) {
+            voiceUsersList_->SetItemBackgroundColour(row, wxColour(220, 245, 226));
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 #include "StreamKitMonitor.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -17,8 +18,6 @@
 #endif
 
 namespace {
-constexpr int PollIntervalMs = 750;
-
 const char* OverlayScrapeScript = R"js(
 (() => {
   const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
@@ -27,27 +26,31 @@ const char* OverlayScrapeScript = R"js(
     const value = element.getAttribute('class');
     return typeof value === 'string' ? value : '';
   };
+  const userId = (row) => row.getAttribute('data-userid') || row.getAttribute('data-user-id') || row.getAttribute('data-id') || '';
   const readRow = (row) => {
     const nameNode = row.querySelector('.voice_username .Voice_name__TALd9, .voice_username span, .name, [class*="name"], [class*="Name"], [data-name]');
     const avatarNode = row.querySelector('.voice_avatar, .avatar, [class*="avatar"], [class*="Avatar"]');
     const text = clean((nameNode || row).textContent);
-    const classes = `${classText(row)} ${classText(nameNode)} ${classText(avatarNode)}`.toLowerCase();
+    const rowClasses = classText(row).toLowerCase();
+    const avatarClasses = classText(avatarNode).toLowerCase();
+    const classes = `${rowClasses} ${avatarClasses}`;
     return {
-      id: row.getAttribute('data-userid') || row.getAttribute('data-user-id') || row.getAttribute('data-id') || text,
+      id: userId(row),
       name: text,
-      speaking: classes.includes('speaking') || classes.includes('wrapper_speaking') || !!row.querySelector('.speaking, [class*="speaking"], [class*="Speaking"]'),
+      speaking: rowClasses.split(/\s+/).includes('wrapper_speaking') || avatarClasses.includes('avatarspeaking') || avatarClasses.split(/\s+/).includes('voice_avatarspeaking'),
       muted: classes.includes('self_mute') || classes.includes('mute') || classes.includes('muted'),
       deafened: classes.includes('self_deaf') || classes.includes('deaf') || classes.includes('deafened')
     };
   };
 
-  let rows = [...document.querySelectorAll('.voice_state, .Voice_voiceState__OCoZh, [class*="voiceState"], [class*="VoiceState"]')];
+  let rows = [...document.querySelectorAll('li.voice_state[data-userid], li[data-userid], [data-user-id], [data-id]')];
   if (!rows.length) {
-    rows = [...document.querySelectorAll('li')].filter((row) => clean(row.textContent));
+    rows = [...document.querySelectorAll('.voice_state, .Voice_voiceState__OCoZh')].filter((row) => userId(row));
   }
 
   return rows
     .map(readRow)
+    .filter((user) => user.id)
     .filter((user) => user.name)
     .filter((user, index, all) => all.findIndex((candidate) => candidate.id === user.id) === index);
 })()
@@ -90,6 +93,36 @@ bool FileExists(const std::string& path)
     return std::filesystem::exists(std::filesystem::u8path(path));
 }
 
+std::string OriginFromUrl(const std::string& url)
+{
+    const auto scheme = url.find("://");
+    if (scheme == std::string::npos) {
+        return {};
+    }
+
+    const auto pathStart = url.find('/', scheme + 3);
+    return pathStart == std::string::npos ? url : url.substr(0, pathStart);
+}
+
+std::string LocalAppAccessBypassFlags(const std::string& overlayUrl)
+{
+    std::ostringstream flags;
+    flags << " --disable-features="
+          << "BlockInsecurePrivateNetworkRequests,"
+          << "PrivateNetworkAccessSendPreflights,"
+          << "PrivateNetworkAccessRespectPreflightResults,"
+          << "PrivateNetworkAccessPermissionPrompt,"
+          << "LocalNetworkAccessChecks,"
+          << "LocalNetworkAccessPermission";
+
+    const auto origin = OriginFromUrl(overlayUrl);
+    if (!origin.empty()) {
+        flags << " --unsafely-treat-insecure-origin-as-secure=" << QuoteArg(origin);
+    }
+
+    return flags.str();
+}
+
 size_t AppendCurlData(char* data, size_t size, size_t nmemb, void* userData)
 {
     auto* output = static_cast<std::string*>(userData);
@@ -110,6 +143,13 @@ std::string TruncateForLog(const std::string& value)
 int PickDebuggingPort()
 {
     return 18000 + static_cast<int>(GetCurrentProcessId() % 20000);
+}
+
+std::string StreamKitProfilePath()
+{
+    wchar_t localAppData[MAX_PATH]{};
+    SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData);
+    return Narrow(std::wstring(localAppData) + L"\\EZ PNGTuber\\StreamKitBrowserProfile");
 }
 #endif
 }
@@ -167,7 +207,7 @@ void StreamKitMonitor::SetErrorHandler(ErrorHandler handler) { onError_ = std::m
 void StreamKitMonitor::SetLogHandler(LogHandler handler) { onLog_ = std::move(handler); }
 void StreamKitMonitor::SetUsersHandler(UsersHandler handler) { onUsers_ = std::move(handler); }
 
-bool StreamKitMonitor::Start(std::string browserPath, std::string overlayUrl, bool showBrowserWindow)
+bool StreamKitMonitor::Start(std::string browserPath, std::string overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt, int pollIntervalMs)
 {
     if (running_) {
         ReportLog("Start requested while StreamKit monitor is already running.");
@@ -180,7 +220,7 @@ bool StreamKitMonitor::Start(std::string browserPath, std::string overlayUrl, bo
 
     running_ = true;
     lastReportedUserCount_ = -1;
-    worker_ = std::thread(&StreamKitMonitor::WorkerLoop, this, std::move(browserPath), std::move(overlayUrl), showBrowserWindow);
+    worker_ = std::thread(&StreamKitMonitor::WorkerLoop, this, std::move(browserPath), std::move(overlayUrl), showBrowserWindow, bypassLocalNetworkPrompt, pollIntervalMs);
     return true;
 }
 
@@ -194,9 +234,12 @@ void StreamKitMonitor::Stop()
     }
 }
 
-void StreamKitMonitor::WorkerLoop(std::string browserPath, std::string overlayUrl, bool showBrowserWindow)
+void StreamKitMonitor::WorkerLoop(std::string browserPath, std::string overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt, int pollIntervalMs)
 {
-    if (!LaunchBrowser(browserPath, overlayUrl, showBrowserWindow)) {
+    pollIntervalMs = std::clamp(pollIntervalMs, 50, 5000);
+    ReportLog("StreamKit poll interval: " + std::to_string(pollIntervalMs) + "ms.");
+
+    if (!LaunchBrowser(browserPath, overlayUrl, showBrowserWindow, bypassLocalNetworkPrompt)) {
         running_ = false;
         return;
     }
@@ -222,7 +265,7 @@ void StreamKitMonitor::WorkerLoop(std::string browserPath, std::string overlayUr
             break;
         }
         ReceiveLoopOnce();
-        std::this_thread::sleep_for(std::chrono::milliseconds(PollIntervalMs));
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
     }
 
     running_ = false;
@@ -230,13 +273,11 @@ void StreamKitMonitor::WorkerLoop(std::string browserPath, std::string overlayUr
     StopBrowser();
 }
 
-bool StreamKitMonitor::LaunchBrowser(const std::string& browserPath, const std::string& overlayUrl, bool showBrowserWindow)
+bool StreamKitMonitor::LaunchBrowser(const std::string& browserPath, const std::string& overlayUrl, bool showBrowserWindow, bool bypassLocalNetworkPrompt)
 {
 #ifdef _WIN32
-    wchar_t tempPath[MAX_PATH]{};
-    GetTempPathW(MAX_PATH, tempPath);
     remoteDebuggingPort_ = PickDebuggingPort();
-    const auto profilePath = Narrow(std::wstring(tempPath) + L"ez-pngtuber-streamkit-profile-" + std::to_wstring(GetCurrentProcessId()));
+    const auto profilePath = StreamKitProfilePath();
     std::filesystem::create_directories(std::filesystem::u8path(profilePath));
 
     std::ostringstream command;
@@ -252,10 +293,17 @@ bool StreamKitMonitor::LaunchBrowser(const std::string& browserPath, const std::
     } else {
         command << " --new-window";
     }
+    if (bypassLocalNetworkPrompt) {
+        command << LocalAppAccessBypassFlags(overlayUrl);
+    }
     command << " " << QuoteArg(overlayUrl);
 
     ReportLog("Launching browser: " + command.str());
     ReportLog("Browser profile: " + profilePath);
+    if (bypassLocalNetworkPrompt) {
+        ReportLog("Using experimental Chromium flags to bypass local app/private network prompts.");
+    }
+    ReportLog("The first visible run may ask to let StreamKit access local apps; Chromium stores that decision in this profile.");
     ReportLog("DevTools URL: http://127.0.0.1:" + std::to_string(remoteDebuggingPort_) + "/json/list");
 
     auto applicationName = Widen(browserPath);
@@ -281,6 +329,7 @@ bool StreamKitMonitor::LaunchBrowser(const std::string& browserPath, const std::
     (void)browserPath;
     (void)overlayUrl;
     (void)showBrowserWindow;
+    (void)bypassLocalNetworkPrompt;
     ReportError("StreamKit browser monitoring is currently implemented for Windows.");
     return false;
 #endif
@@ -580,4 +629,3 @@ bool StreamKitMonitor::ParseWebSocketUrl(const std::string& url, std::string& ho
     path = withoutScheme.substr(slash);
     return true;
 }
-
