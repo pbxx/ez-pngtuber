@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(wxWidgets CONFIG QUIET COMPONENTS core base)
+find_package(CURL CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 if(wxWidgets_FOUND)
     set(EZ_PNGTUBER_WX_LIBRARIES wx::core wx::base)
@@ -22,14 +24,25 @@ endif()
 
 add_executable(ez-pngtuber
     src/main.cpp
+    src/DiscordModels.h
+    src/DiscordRpcClient.cpp
+    src/DiscordRpcClient.h
     src/MainWindow.cpp
     src/MainWindow.h
+    src/StreamKitMonitor.cpp
+    src/StreamKitMonitor.h
 )
 
 target_link_libraries(ez-pngtuber
     PRIVATE
         ${EZ_PNGTUBER_WX_LIBRARIES}
+        CURL::libcurl
+        nlohmann_json::nlohmann_json
 )
+
+if(WIN32)
+    target_link_libraries(ez-pngtuber PRIVATE winhttp)
+endif()
 
 set_target_properties(ez-pngtuber PROPERTIES
     OUTPUT_NAME "ez-pngtuber"
